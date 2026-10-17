@@ -4,7 +4,14 @@ import EventraAdminApp from "./BigDay-admin-app";
 import AdminAuthGuard from "./admin/AdminAuthGuard";
 
 export default function App() {
-  const path = window.location.pathname;
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const pathname = window.location.pathname;
+  const path =
+    pathname === basePath
+      ? "/"
+      : pathname.startsWith(`${basePath}/`)
+        ? pathname.slice(basePath.length)
+        : pathname;
 
   // 🔐 Admin — protected by AdminAuthGuard
   if (path.startsWith("/admin")) {
