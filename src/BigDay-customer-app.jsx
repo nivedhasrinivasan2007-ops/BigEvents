@@ -1,4 +1,19 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import {
+  getCurrentCustomer,
+  getCustomerProfile,
+  onAuthStateChange,
+  signInCustomer,
+  signOutCustomer,
+  signUpCustomer,
+} from "./services/authService";
+import {
+  acceptQuote,
+  createRequirement,
+  getQuotesForRequirement,
+  getRequirementsForCustomer,
+  usePrototypeState,
+} from "./services/prototypeStore";
 import {
   ChevronLeft, ChevronRight, Home, FileText, MessageCircle, Calendar,
   User, Check, Star, MapPin, Users, Clock, ShieldCheck, Send, Plus,
@@ -481,14 +496,34 @@ function InputField({ label, placeholder, value, onChange, type = "text", icon: 
   );
 }
 
-function SignUpScreen({ go, setUserName }) {
+function SignUpScreen({ go, setUserName, setAuthUser }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const canContinue = name.trim().length > 1 && phone.trim().length >= 10;
-  const submit = () => {
-    setUserName(name.trim().split(" ")[0] ? name.trim() : name.trim());
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
+  const canContinue = name.trim().length > 1 && phone.trim().length >= 10 && email.trim() && password.length >= 6;
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    const { user, requiresEmailConfirmation, error: authError } = await signUpCustomer(email.trim(), password, name.trim(), phone.trim());
+    if (authError) {
+      setError(authError);
+      setLoading(false);
+      return;
+    }
+    if (requiresEmailConfirmation) {
+      setNotice("Account created. Check your email to confirm your address, then log in.");
+      setLoading(false);
+      return;
+    }
+    if (user) setAuthUser(user);
+    setUserName(name.trim());
     go("home");
+    setLoading(false);
   };
   return (
     <Screen>
@@ -497,30 +532,47 @@ function SignUpScreen({ go, setUserName }) {
         <p className="text-[13px] ev-muted mb-5">Let's start with your name so vendors know who they're working with.</p>
         <InputField label="Full Name" placeholder="e.g. Priya Raman" value={name} onChange={setName} icon={User} />
         <InputField label="Phone Number" placeholder="10-digit mobile number" value={phone} onChange={setPhone} type="tel" icon={Smartphone} />
-        <InputField label="Email (optional)" placeholder="you@email.com" value={email} onChange={setEmail} type="email" />
-        <PrimaryButton onClick={submit} icon={ArrowRight} disabled={!canContinue}>Create Account</PrimaryButton>
+        <InputField label="Email" placeholder="you@email.com" value={email} onChange={setEmail} type="email" />
+        <InputField label="Password" placeholder="At least 6 characters" value={password} onChange={setPassword} type="password" />
+        {error && <p className="text-[12px] text-red-600 mb-3">{error}</p>}
+        {notice && <p className="text-[12px] ev-success mb-3">{notice}</p>}
+        <PrimaryButton onClick={submit} icon={ArrowRight} disabled={!canContinue || loading}>{loading ? "Creating..." : "Create Account"}</PrimaryButton>
         <p className="text-center text-[12px] ev-muted mt-4">Already have an account? <button onClick={() => go("signIn")} className="ev-accent font-semibold">Log in</button></p>
       </div>
     </Screen>
   );
 }
 
-function SignInScreen({ go, setUserName }) {
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const canContinue = name.trim().length > 1 && phone.trim().length >= 10;
-  const submit = () => {
-    setUserName(name.trim());
+function SignInScreen({ go, setUserName, setAuthUser }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const canContinue = email.trim().length > 0 && password.length >= 6;
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    const { user, error: authError } = await signInCustomer(email.trim(), password);
+    if (authError) {
+      setError(authError);
+      setLoading(false);
+      return;
+    }
+    setAuthUser(user);
+    const { profile } = await getCustomerProfile(user.id);
+    setUserName(profile?.full_name || email.split("@")[0]);
     go("home");
+    setLoading(false);
   };
   return (
     <Screen>
       <TopBar title="Log In" onBack={() => go("landing")} />
       <div className="px-5 pb-6">
-        <p className="text-[13px] ev-muted mb-5">Welcome back — confirm your details to continue.</p>
-        <InputField label="Full Name" placeholder="e.g. Priya Raman" value={name} onChange={setName} icon={User} />
-        <InputField label="Phone Number" placeholder="10-digit mobile number" value={phone} onChange={setPhone} type="tel" icon={Smartphone} />
-        <PrimaryButton onClick={submit} icon={ArrowRight} disabled={!canContinue}>Log In</PrimaryButton>
+        <p className="text-[13px] ev-muted mb-5">Welcome back — sign in to continue.</p>
+        <InputField label="Email" placeholder="you@email.com" value={email} onChange={setEmail} type="email" icon={User} />
+        <InputField label="Password" placeholder="Your password" value={password} onChange={setPassword} type="password" icon={Smartphone} />
+        {error && <p className="text-[12px] text-red-600 mb-3">{error}</p>}
+        <PrimaryButton onClick={submit} icon={ArrowRight} disabled={!canContinue || loading}>{loading ? "Signing in..." : "Log In"}</PrimaryButton>
         <p className="text-center text-[12px] ev-muted mt-4">New to Eventra? <button onClick={() => go("signUp")} className="ev-accent font-semibold">Create an account</button></p>
       </div>
     </Screen>
@@ -801,7 +853,7 @@ function ReviewRow({ label, value }) {
   );
 }
 
-function ReviewRequirementScreen({ data, go }) {
+function ReviewRequirementScreen({ data, go, onRequestQuotes }) {
   return (
     <Screen>
       <TopBar title="Review Requirement" sub="Confirm before requesting quotes" onBack={() => go("wizard5")} />
@@ -822,9 +874,9 @@ function ReviewRequirementScreen({ data, go }) {
         </div>
         <div className="ev-card rounded-2xl p-3.5 flex gap-2.5 mb-6">
           <Info size={16} className="ev-gold shrink-0 mt-0.5" />
-          <div className="text-[12px] ev-muted leading-relaxed">Your requirement is sent to <span className="font-semibold ev-ink">verified caterers only</span>. They'll submit private proposals — your budget stays confidential.</div>
+          <div className="text-[12px] ev-muted leading-relaxed"><span className="font-semibold ev-ink">Prototype preview:</span> this requirement is saved in this browser only. It is not sent to live vendors or stored in Supabase.</div>
         </div>
-        <PrimaryButton onClick={() => go("matching")} icon={ArrowRight}>Request Quotes</PrimaryButton>
+        <PrimaryButton onClick={onRequestQuotes} icon={ArrowRight}>Request Quotes</PrimaryButton>
       </div>
     </Screen>
   );
@@ -839,7 +891,7 @@ function MatchingScreen({ go }) {
     const done = setTimeout(() => go("proposals"), 500 + checks.length * 550 + 700);
     return () => { timers.forEach(clearTimeout); clearTimeout(done); };
   }, []);
-  const steps = ["Requirement created", "Finding relevant vendors", "Checking availability", "Matching verified caterers"];
+  const steps = ["Local preview created", "Using sample vendor matches", "No live availability check", "Supabase workflow not connected"];
   return (
     <Screen>
       <div className="h-full flex flex-col items-center justify-center px-8">
@@ -848,8 +900,8 @@ function MatchingScreen({ go }) {
             <Sparkles size={28} className="ev-accent" />
           </div>
         </div>
-        <div className="ev-display text-[19px] font-semibold ev-ink mb-1 text-center">Your requirement is live</div>
-        <div className="text-[13px] ev-muted mb-8 text-center">This usually takes a few seconds</div>
+        <div className="ev-display text-[19px] font-semibold ev-ink mb-1 text-center">Prototype matching preview</div>
+        <div className="text-[13px] ev-muted mb-8 text-center">No live vendors are contacted</div>
         <div className="w-full space-y-3.5">
           {steps.map((s, i) => (
             <div key={s} className="flex items-center gap-3">
@@ -865,13 +917,14 @@ function MatchingScreen({ go }) {
   );
 }
 
-function ProposalsScreen({ go, setSelectedVendor }) {
+function ProposalsScreen({ go, requirement, quotes, vendors, setSelectedQuote }) {
   const { h, m } = useCountdown(30);
   return (
     <Screen nav={<BottomNav active="proposals" go={go} />}>
       <div className="px-5 pt-4 pb-2">
         <div className="ev-display text-[21px] font-semibold ev-ink mb-0.5">Proposals for your event</div>
-        <div className="text-[12.5px] ev-muted mb-4">3 verified caterers responded · Ramesh & Priya's Wedding</div>
+        <div className="text-[12.5px] ev-muted mb-4">{requirement?.eventType || "Your event"} · {quotes.length} {quotes.length === 1 ? "quote" : "quotes"} received</div>
+        <div className="text-[11.5px] ev-muted mb-4">Prototype data is local to this browser and is not shared with other accounts.</div>
 
         <div className="ev-bg-accent-soft rounded-2xl p-3 flex items-center gap-2.5 mb-3">
           <Clock size={16} className="ev-accent shrink-0" />
@@ -887,44 +940,59 @@ function ProposalsScreen({ go, setSelectedVendor }) {
         </div>
       </div>
       <div className="px-5 pb-4 space-y-4">
-        {VENDORS.map((v) => (
-          <button key={v.id} onClick={() => { setSelectedVendor(v.id); go("proposalDetail"); }}
+        {quotes.map((quote) => {
+          const vendor = vendors.find((item) => item.id === quote.vendorId);
+          return <button key={quote.id} onClick={() => { setSelectedQuote(quote.id); go("proposalDetail"); }}
             className="ev-tap ev-card rounded-2xl p-4 text-left w-full block relative">
             <div className="flex items-start justify-between mb-2.5">
               <div className="flex items-center gap-2.5">
                 <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0">
-                  <VendorImage src={v.image} alt={v.name} className="w-full h-full" />
+                  <VendorImage src={VENDORS.find((item) => item.id === vendor?.id)?.image || IMAGES.food1} alt={vendor?.businessName || "Vendor"} className="w-full h-full" />
                 </div>
                 <div>
                   <div className="text-[14px] font-semibold ev-ink flex items-center gap-1.5">
-                    {v.name}
-                    {v.verified && <ShieldCheck size={13} className="ev-success" />}
+                    {vendor?.businessName || "Vendor"}
+                    <ShieldCheck size={13} className="ev-success" />
                   </div>
-                  <div className="text-[11px] ev-muted">{v.tagline}</div>
+                  <div className="text-[11px] ev-muted">{vendor?.location || requirement?.location} · {vendor?.category || requirement?.category}</div>
                 </div>
               </div>
-              <Badge tone="gold">{MATCH[v.id].score}% Match</Badge>
+              <Badge tone={quote.status === "accepted" ? "success" : "gold"}>{quote.status === "accepted" ? "Accepted" : "Quote received"}</Badge>
             </div>
-            <div className="flex items-center gap-3 text-[11.5px] ev-muted mb-2 flex-wrap">
-              <span className="flex items-center gap-1"><Star size={12} className="ev-gold fill-current" />{v.rating} ({v.reviews})</span>
-              <span>·</span>
-              <span>{v.events}</span>
-              <span>·</span>
-              <span>{v.location}</span>
-            </div>
-            <div className="mb-3"><AvailabilityPill vendorId={v.id} /></div>
             <div className="rounded-xl p-3 flex items-center justify-between" style={{ background: "#FBF8F3" }}>
               <div>
-                <div className="text-[16px] font-bold ev-ink">{inr(v.price)}</div>
-                <div className="text-[11px] ev-muted">{v.package}</div>
+                <div className="text-[16px] font-bold ev-ink">{inr(quote.amount)}</div>
+                <div className="text-[11px] ev-muted">{quote.message || "Open quote details"}</div>
               </div>
               <ChevronRight size={18} className="ev-faint" />
             </div>
-          </button>
-        ))}
+          </button>;
+        })}
+        {!quotes.length && <div className="ev-card rounded-2xl p-5 text-center text-[13px] ev-muted">No quotes yet. Matched vendors can submit a quote for this requirement.</div>}
       </div>
+    </Screen>
+  );
+}
+
+function SharedQuoteDetailScreen({ go, requirement, quote, vendor, onAccept }) {
+  if (!quote || !requirement) return <Screen><TopBar title="Proposal" onBack={() => go("proposals")} /><div className="px-5 text-[13px] ev-muted">This quote is no longer available.</div></Screen>;
+  return (
+    <Screen>
+      <TopBar title="Proposal" onBack={() => go("proposals")} />
       <div className="px-5 pb-6">
-        <PrimaryButton onClick={() => go("compare")} icon={ArrowRight}>Compare Proposals</PrimaryButton>
+        <div className="ev-card rounded-2xl p-4 mb-4">
+          <div className="text-[15px] font-semibold ev-ink">{vendor?.businessName || "Vendor"}</div>
+          <div className="text-[12px] ev-muted mt-1">{requirement.eventType} · {requirement.eventDate} · {requirement.location}</div>
+          <div className="ev-display text-[26px] font-bold ev-ink mt-4">{inr(quote.amount)}</div>
+          {quote.message && <p className="text-[13px] ev-muted leading-relaxed mt-3">{quote.message}</p>}
+          <div className="mt-4"><Badge tone={quote.status === "accepted" ? "success" : "accent"}>{quote.status === "accepted" ? "Accepted" : "Sent"}</Badge></div>
+        </div>
+        {quote.status === "accepted" ? (
+          <PrimaryButton onClick={() => go("proposals")}>Back to Proposals</PrimaryButton>
+        ) : (
+          <PrimaryButton onClick={() => onAccept(quote.id)}>Accept Quote</PrimaryButton>
+        )}
+        <p className="text-[11.5px] ev-muted mt-3">Prototype acceptance updates local preview data only; it does not create a booking.</p>
       </div>
     </Screen>
   );
@@ -1893,7 +1961,7 @@ function ToggleRow({ label, sub, value, onChange }) {
   );
 }
 
-function SettingsScreen({ go }) {
+function SettingsScreen({ go, onLogout }) {
   const [notif, setNotif] = useState(true);
   const [email, setEmail] = useState(true);
   const [whatsapp, setWhatsapp] = useState(false);
@@ -1921,7 +1989,7 @@ function SettingsScreen({ go }) {
             </button>
           ))}
         </div>
-        <button onClick={() => go("landing")} className="ev-tap w-full text-center py-3.5 mt-5 text-[13px] font-semibold" style={{ color: "#B23B4A" }}>Log Out</button>
+        <button onClick={onLogout} className="ev-tap w-full text-center py-3.5 mt-5 text-[13px] font-semibold" style={{ color: "#B23B4A" }}>Log Out</button>
 
         <div className="text-[12px] font-semibold ev-muted mb-2.5 mt-6 uppercase tracking-wide">Prototype Tools</div>
         <button onClick={() => go("managePackage")} className="ev-tap w-full ev-card rounded-2xl p-3.5 flex items-center gap-3">
@@ -2050,8 +2118,26 @@ function HelpSupportScreen({ go }) {
 export default function EventraApp() {
   const [screen, setScreen] = useState("landing");
   const [selectedVendor, setSelectedVendor] = useState("v1");
+  const [selectedQuoteId, setSelectedQuoteId] = useState(null);
+  const [activeRequirementId, setActiveRequirementId] = useState(null);
   const [reqData, setReqData] = useState({});
   const [userName, setUserName] = useState("");
+  const [authUser, setAuthUser] = useState(null);
+  const prototypeState = usePrototypeState();
+  const customerId = authUser?.id || userName.trim().toLowerCase() || "prototype-customer";
+  const customerRequirements = getRequirementsForCustomer(prototypeState, customerId)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const currentRequirement = customerRequirements.find((item) => item.id === activeRequirementId) || customerRequirements[0] || null;
+  const currentRequirementQuotes = currentRequirement
+    ? getQuotesForRequirement(prototypeState, currentRequirement.id)
+    : [];
+  const selectedQuote = prototypeState.quotes.find((item) => item.id === selectedQuoteId) || null;
+  const selectedQuoteRequirement = selectedQuote
+    ? prototypeState.requirements.find((item) => item.id === selectedQuote.requirementId)
+    : null;
+  const selectedQuoteVendor = selectedQuote
+    ? prototypeState.vendors.find((item) => item.id === selectedQuote.vendorId)
+    : null;
   const [packages, setPackages] = useState(() =>
     VENDORS.reduce((acc, v) => {
       acc[v.id] = { included: [...v.inclusions], notIncluded: [...v.exclusions], minGuests: v.minGuests, notes: v.notes };
@@ -2059,20 +2145,96 @@ export default function EventraApp() {
     }, {})
   );
 
+  useEffect(() => {
+    let mounted = true;
+
+    const restoreCustomer = async () => {
+      const { user } = await getCurrentCustomer();
+      if (!mounted || !user) return;
+
+      const { profile, error } = await getCustomerProfile(user.id);
+      if (error || profile?.role !== "customer") {
+        await signOutCustomer();
+        return;
+      }
+
+      setAuthUser(user);
+      if (mounted) {
+        setUserName(profile?.full_name || user.email?.split("@")[0] || "");
+        setScreen("home");
+      }
+    };
+
+    restoreCustomer();
+    const unsubscribe = onAuthStateChange(async ({ user }) => {
+      if (!mounted) return;
+
+      setAuthUser(user);
+      if (!user) {
+        setUserName("");
+        setScreen("landing");
+        return;
+      }
+
+      const { profile, error } = await getCustomerProfile(user.id);
+      if (error || profile?.role !== "customer") {
+        await signOutCustomer();
+        return;
+      }
+
+      if (mounted) {
+        setUserName(profile?.full_name || user.email?.split("@")[0] || "");
+        setScreen("home");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    await signOutCustomer();
+  };
+
+  const handleRequestQuotes = () => {
+    const requirement = createRequirement({
+      customerId,
+      customerName: userName || "Customer",
+      eventType: (reqData.types?.length ? reqData.types : ["Wedding"]).join(", "),
+      eventDate: reqData.date || "2027-02-14",
+      location: reqData.city || "Chennai",
+      guestCount: reqData.guests || "250–500",
+      category: "Catering",
+      budget: reqData.budget || "₹50,000 – ₹1,00,000",
+      notes: reqData.notes || "Need traditional South Indian vegetarian catering with a live dosa counter.",
+    });
+    setActiveRequirementId(requirement.id);
+    setScreen("matching");
+  };
+
+  const handleAcceptQuote = (quoteId) => {
+    const accepted = acceptQuote(quoteId, customerId);
+    if (accepted) setScreen("proposals");
+  };
+
   const screens = {
     landing: <LandingScreen go={setScreen} />,
-    signUp: <SignUpScreen go={setScreen} setUserName={setUserName} />,
-    signIn: <SignInScreen go={setScreen} setUserName={setUserName} />,
+    signUp: <SignUpScreen go={setScreen} setUserName={setUserName} setAuthUser={setAuthUser} />,
+    signIn: <SignInScreen go={setScreen} setUserName={setUserName} setAuthUser={setAuthUser} />,
     home: <HomeScreen go={setScreen} userName={userName} />,
     wizard1: <Wizard1 data={reqData} setData={setReqData} go={setScreen} />,
     wizard2: <Wizard2 data={reqData} setData={setReqData} go={setScreen} />,
     wizard3: <Wizard3 data={reqData} setData={setReqData} go={setScreen} />,
     wizard4: <Wizard4 data={reqData} setData={setReqData} go={setScreen} />,
     wizard5: <Wizard5 data={reqData} setData={setReqData} go={setScreen} />,
-    reviewReq: <ReviewRequirementScreen data={reqData} go={setScreen} />,
+    reviewReq: <ReviewRequirementScreen data={reqData} go={setScreen} onRequestQuotes={handleRequestQuotes} />,
     matching: <MatchingScreen go={setScreen} />,
-    proposals: <ProposalsScreen go={setScreen} setSelectedVendor={setSelectedVendor} />,
-    proposalDetail: <ProposalDetailScreen go={setScreen} selectedVendor={selectedVendor} packages={packages} />,
+    proposals: <ProposalsScreen go={setScreen} requirement={currentRequirement} quotes={currentRequirementQuotes} vendors={prototypeState.vendors} setSelectedQuote={setSelectedQuoteId} />,
+    proposalDetail: selectedQuote
+      ? <SharedQuoteDetailScreen go={setScreen} requirement={selectedQuoteRequirement} quote={selectedQuote} vendor={selectedQuoteVendor} onAccept={handleAcceptQuote} />
+      : <ProposalDetailScreen go={setScreen} selectedVendor={selectedVendor} packages={packages} />,
     vendorAvailability: <VendorAvailabilityScreen go={setScreen} selectedVendor={selectedVendor} />,
     requirementTimeline: <RequirementTimelineScreen go={setScreen} />,
     compare: <CompareScreen go={setScreen} setSelectedVendor={setSelectedVendor} />,
@@ -2091,7 +2253,7 @@ export default function EventraApp() {
     myRequirements: <MyRequirementsScreen go={setScreen} />,
     payments: <PaymentsScreen go={setScreen} />,
     savedVendors: <SavedVendorsScreen go={setScreen} setSelectedVendor={setSelectedVendor} />,
-    settings: <SettingsScreen go={setScreen} />,
+    settings: <SettingsScreen go={setScreen} onLogout={handleLogout} />,
     editProfile: <EditProfileScreen go={setScreen} userName={userName} setUserName={setUserName} />,
     addresses: <AddressesScreen go={setScreen} />,
     language: <LanguageScreen go={setScreen} />,

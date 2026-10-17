@@ -1,4 +1,21 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  getCurrentVendor,
+  getVendorProfile,
+  onVendorAuthStateChange,
+  signInVendor,
+  signOutVendor,
+  signUpVendor,
+} from "./services/authService";
+import {
+  createQuote,
+  getQuotesForVendor,
+  getRequirementsForVendor,
+  PROTOTYPE_VENDOR_ID,
+  registerPrototypeVendor,
+  updateRequirementStatus,
+  usePrototypeState,
+} from "./services/prototypeStore";
 import {
   ChevronLeft, ChevronRight, Home, Calendar, Wallet, User, Check, Star,
   MapPin, Users, Clock, ShieldCheck, Send, Plus, ChefHat,
@@ -327,13 +344,13 @@ function OptionTile({ label, sub, selected, onClick, icon: Icon }) {
     </button>
   );
 }
-function InputField({ label, placeholder, value, onChange, type = "text", icon: Icon }) {
+function InputField({ label, placeholder, value, onChange = () => {}, type = "text", icon: Icon, inputRef }) {
   return (
     <div className="mb-4">
       <label className="text-[12px] font-semibold ev-muted mb-1.5 block">{label}</label>
       <div className="ev-card rounded-2xl p-3.5 flex items-center gap-3">
         {Icon && <Icon size={17} className="ev-accent shrink-0" />}
-        <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+        <input ref={inputRef} type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
           className="bg-transparent outline-none text-[14px] ev-ink flex-1 placeholder:ev-faint" />
       </div>
     </div>
@@ -393,14 +410,39 @@ function VendorLandingScreen({ go }) {
     </Screen>
   );
 }
-function VendorLoginScreen({ go, setLoggedIn }) {
+function VendorLoginScreen({ go, onVendorAuthenticated }) {
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const passwordRef = useRef(null);
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    const password = passwordRef.current?.value || "";
+    if (!email.trim() || password.length < 6) {
+      setError("Enter a valid email and password.");
+      setLoading(false);
+      return;
+    }
+    const { user, error: authError } = await signInVendor(email.trim(), password);
+    if (authError) {
+      setError(authError);
+      setLoading(false);
+      return;
+    }
+    await onVendorAuthenticated(user);
+    setLoading(false);
+  };
   return (
     <Screen>
       <TopBar title="Vendor Log In" onBack={() => go("vendorLanding")} />
       <div className="px-5 pb-6">
         <InputField label="Registered Phone Number" placeholder="10-digit mobile number" value={phone} onChange={setPhone} type="tel" icon={Phone} />
-        <PrimaryButton onClick={() => { setLoggedIn(true); go("dashboard"); }} icon={ArrowRight} disabled={phone.trim().length < 10}>Send OTP & Log In</PrimaryButton>
+        <InputField label="Email" placeholder="you@email.com" value={email} onChange={setEmail} type="email" icon={User} />
+        <InputField label="Password" placeholder="Your password" type="password" inputRef={passwordRef} />
+        {error && <p className="text-[12px] text-red-600 mb-3">{error}</p>}
+        <PrimaryButton onClick={submit} icon={ArrowRight} disabled={!email.trim() || loading}>{loading ? "Signing in..." : "Log In"}</PrimaryButton>
         <p className="text-center text-[12px] ev-muted mt-4">New vendor? <button onClick={() => go("vendorRegister")} className="ev-accent font-semibold">Register here</button></p>
       </div>
     </Screen>
@@ -408,7 +450,33 @@ function VendorLoginScreen({ go, setLoggedIn }) {
 }
 function VendorRegisterScreen({ go }) {
   const [biz, setBiz] = useState(""); const [owner, setOwner] = useState(""); const [phone, setPhone] = useState("");
-  const canContinue = biz.trim() && owner.trim() && phone.trim().length >= 10;
+  const [email, setEmail] = useState(""); const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [loading, setLoading] = useState(false);
+  const passwordRef = useRef(null);
+  const canContinue = biz.trim() && owner.trim() && phone.trim().length >= 10 && email.trim();
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    const password = passwordRef.current?.value || "";
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters.");
+      setLoading(false);
+      return;
+    }
+    const { requiresEmailConfirmation, error: authError } = await signUpVendor(email.trim(), password, owner.trim(), phone.trim(), { businessName: biz.trim() });
+    if (authError) {
+      setError(authError);
+      setLoading(false);
+      return;
+    }
+    if (requiresEmailConfirmation) {
+      setNotice("Account created. Check your email to confirm your address, then log in.");
+      setLoading(false);
+      return;
+    }
+    go("onboard1");
+    setLoading(false);
+  };
   return (
     <Screen>
       <TopBar title="Register Your Business" onBack={() => go("vendorLanding")} />
@@ -416,7 +484,11 @@ function VendorRegisterScreen({ go }) {
         <InputField label="Business Name" placeholder="e.g. Annapoorna Catering Co." value={biz} onChange={setBiz} icon={Building2} />
         <InputField label="Owner Name" placeholder="Your full name" value={owner} onChange={setOwner} icon={User} />
         <InputField label="Phone Number" placeholder="10-digit mobile number" value={phone} onChange={setPhone} type="tel" icon={Phone} />
-        <PrimaryButton onClick={() => go("onboard1")} icon={ArrowRight} disabled={!canContinue}>Continue to Onboarding</PrimaryButton>
+        <InputField label="Email" placeholder="you@email.com" value={email} onChange={setEmail} type="email" icon={User} />
+        <InputField label="Password" placeholder="At least 6 characters" type="password" inputRef={passwordRef} />
+        {error && <p className="text-[12px] text-red-600 mb-3">{error}</p>}
+        {notice && <p className="text-[12px] ev-success mb-3">{notice}</p>}
+        <PrimaryButton onClick={submit} icon={ArrowRight} disabled={!canContinue || loading}>{loading ? "Creating account..." : "Continue to Onboarding"}</PrimaryButton>
       </div>
     </Screen>
   );
@@ -485,7 +557,7 @@ function Onboard5({ go }) {
     </WizardShell>
   );
 }
-function VerificationPendingScreen({ go, setLoggedIn }) {
+function VerificationPendingScreen({ go, onVendorAuthenticated }) {
   return (
     <Screen>
       <div className="h-full flex flex-col items-center justify-center px-8 text-center">
@@ -494,7 +566,7 @@ function VerificationPendingScreen({ go, setLoggedIn }) {
         <p className="text-[13px] ev-muted mb-2 leading-relaxed">Our team typically reviews new vendors within 24–48 hours.</p>
         <Badge tone="gold">Under Review</Badge>
         <div className="mt-8 w-full">
-          <PrimaryButton onClick={() => { setLoggedIn(true); go("dashboard"); }} icon={ArrowRight}>Continue to Dashboard (Demo)</PrimaryButton>
+          <PrimaryButton onClick={onVendorAuthenticated} icon={ArrowRight}>Continue to Dashboard</PrimaryButton>
           <p className="text-center text-[10.5px] ev-faint mt-3">In production, dashboard access unlocks only after admin approval.</p>
         </div>
       </div>
@@ -504,7 +576,7 @@ function VerificationPendingScreen({ go, setLoggedIn }) {
 
 /* ================= MAIN APP SCREENS ================= */
 
-function DashboardScreen({ go, viewport = "mobile" }) {
+function DashboardScreen({ go, viewport = "mobile", vendorProfile }) {
   const isDesktop = viewport === "desktop";
   return (
     <Screen nav={<BottomNav active="dashboard" go={go} />}>
@@ -512,7 +584,7 @@ function DashboardScreen({ go, viewport = "mobile" }) {
         <div className="flex items-center justify-between mb-5">
           <div>
             <div className="text-[13px] ev-muted">Good morning,</div>
-            <div className="ev-display text-[21px] md:text-[26px] font-semibold ev-ink">{BUSINESS.owner} 👋</div>
+            <div className="ev-display text-[21px] md:text-[26px] font-semibold ev-ink">{vendorProfile.fullName || "Vendor"} 👋</div>
           </div>
           <button onClick={() => go("notifications")} className="w-10 h-10 rounded-full ev-card flex items-center justify-center relative ev-tap">
             <Bell size={17} className="ev-ink" /><span className="absolute top-2 right-2.5 w-1.5 h-1.5 rounded-full ev-bg-accent" />
@@ -754,22 +826,42 @@ function BookingDetailScreen({ go, bookingId }) {
 
 /* ---- Enquiries / Quotes ---- */
 
-function EnquiriesScreen({ go, setEnquiries, enquiries, viewport = "mobile" }) {
-  const act = (id, status) => setEnquiries(enquiries.map((e) => e.id === id ? { ...e, status } : e));
+function EnquiriesScreen({ go, setEnquiries, enquiries, prototypeRequirements = [], onUpdatePrototypeRequirement, viewport = "mobile" }) {
+  const prototypeEnquiries = prototypeRequirements.map((requirement) => ({
+    id: `prototype:${requirement.id}`,
+    requirementId: requirement.id,
+    customer: requirement.customerName || "Customer",
+    event: requirement.eventType,
+    date: requirement.eventDate,
+    location: requirement.location,
+    guests: requirement.guestCount,
+    budget: requirement.budget,
+    notes: requirement.notes,
+    status: requirement.status === "open" ? "New" : requirement.status[0].toUpperCase() + requirement.status.slice(1),
+  }));
+  const displayedEnquiries = [...prototypeEnquiries, ...enquiries];
+  const act = (enquiry, status) => {
+    if (enquiry.requirementId) {
+      onUpdatePrototypeRequirement(enquiry.requirementId, status.toLowerCase());
+      return;
+    }
+    setEnquiries(enquiries.map((item) => item.id === enquiry.id ? { ...item, status } : item));
+  };
   const isDesktop = viewport === "desktop";
   return (
     <Screen>
       <TopBar title="Enquiries" onBack={() => go("more")} />
+      <div className="px-5 md:px-0 pb-3 text-[11.5px] ev-muted">Prototype preview only: enquiries and quotes are stored in this browser, not shared with customer accounts or Supabase.</div>
       <div className={"px-5 md:px-0 pb-6 " + (isDesktop ? "grid grid-cols-2 gap-4" : "space-y-3")}>
-        {enquiries.map((e) => (
+        {displayedEnquiries.map((e) => (
           <div key={e.id} className="ev-card rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2"><span className="text-[13.5px] font-semibold ev-ink">{e.customer}</span><Badge tone={e.status === "New" ? "gold" : "neutral"}>{e.status}</Badge></div>
             <div className="text-[12px] ev-muted mb-1">{e.event} · {e.date} · {e.location} · {e.guests} guests</div>
             <div className="text-[12px] ev-muted mb-2">Budget: {e.budget}</div>
             <div className="text-[11.5px] ev-ink leading-relaxed mb-3 ev-bg-gold-soft rounded-xl p-2.5">{e.notes}</div>
             <div className="grid grid-cols-3 gap-2">
-              <button onClick={() => act(e.id, "Contacted")} className="ev-tap ev-card rounded-xl py-2 text-[11px] font-semibold ev-ink">Contact</button>
-              <button onClick={() => act(e.id, "Rejected")} className="ev-tap ev-card rounded-xl py-2 text-[11px] font-semibold" style={{ color: "#B23B4A" }}>Reject</button>
+              <button onClick={() => act(e, "Contacted")} className="ev-tap ev-card rounded-xl py-2 text-[11px] font-semibold ev-ink">Contact</button>
+              <button onClick={() => act(e, "Rejected")} className="ev-tap ev-card rounded-xl py-2 text-[11px] font-semibold" style={{ color: "#B23B4A" }}>Reject</button>
               <button onClick={() => go("quoteBuilder_" + e.id)} className="ev-tap rounded-xl py-2 text-[11px] font-semibold ev-bg-accent text-white">Create Quote</button>
             </div>
           </div>
@@ -779,22 +871,45 @@ function EnquiriesScreen({ go, setEnquiries, enquiries, viewport = "mobile" }) {
   );
 }
 
-function QuoteBuilderScreen({ go, enquiryId, enquiries, setQuotes, quotes }) {
-  const e = enquiries.find((x) => x.id === enquiryId) || enquiries[0];
+function QuoteBuilderScreen({ go, enquiryId, enquiries, setQuotes, quotes, prototypeRequirements = [], vendorProfile }) {
+  const prototypeRequirementId = enquiryId.startsWith("prototype:") ? enquiryId.slice("prototype:".length) : null;
+  const prototypeRequirement = prototypeRequirements.find((item) => item.id === prototypeRequirementId);
+  const e = prototypeRequirement
+    ? {
+        customer: prototypeRequirement.customerName || "Customer",
+        event: prototypeRequirement.eventType,
+        date: prototypeRequirement.eventDate,
+        location: prototypeRequirement.location,
+        guests: prototypeRequirement.guestCount,
+        budget: prototypeRequirement.budget,
+      }
+    : enquiries.find((item) => item.id === enquiryId) || enquiries[0];
   const [items, setItems] = useState([{ label: "Food Package", amount: 0 }]);
   const [label, setLabel] = useState(""); const [amount, setAmount] = useState("");
+  const [message, setMessage] = useState("");
   const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
   const addItem = () => { if (!label.trim() || !amount) return; setItems([...items, { label, amount: Number(amount) }]); setLabel(""); setAmount(""); };
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
   const send = () => {
-    setQuotes([...quotes, { id: "q" + (quotes.length + 1), customer: e.customer, event: e.event, guests: e.guests, items, status: "Sent" }]);
+    if (total <= 0) return;
+    if (prototypeRequirement) {
+      const quote = createQuote({
+        requirementId: prototypeRequirement.id,
+        vendorId: PROTOTYPE_VENDOR_ID,
+        amount: total,
+        message: message.trim(),
+      });
+      if (!quote) return;
+    } else {
+      setQuotes([...quotes, { id: "q" + (quotes.length + 1), customer: e.customer, event: e.event, guests: e.guests, items, status: "Sent" }]);
+    }
     go("quotes");
   };
   return (
     <Screen>
       <TopBar title="Create Quote" sub={e.customer + " · " + e.event} onBack={() => go("enquiries")} />
       <div className="px-5 pb-6">
-        <div className="ev-card rounded-2xl p-3.5 mb-4"><ReviewRow label="Event" value={e.event} /><ReviewRow label="Guests" value={e.guests} /><ReviewRow label="Date" value={e.date} /></div>
+        <div className="ev-card rounded-2xl p-3.5 mb-4"><ReviewRow label="Event" value={e.event} /><ReviewRow label="Guests" value={e.guests} /><ReviewRow label="Date" value={e.date} />{prototypeRequirement && <ReviewRow label="Location" value={e.location} />}</div>
         <div className="text-[12px] font-semibold ev-ink mb-2.5">Line items</div>
         <div className="space-y-2 mb-3">
           {items.map((it, i) => (
@@ -810,14 +925,27 @@ function QuoteBuilderScreen({ go, enquiryId, enquiries, setQuotes, quotes }) {
           <button onClick={addItem} className="ev-tap w-9 h-9 rounded-xl ev-bg-accent flex items-center justify-center shrink-0"><Plus size={15} className="text-white" /></button>
         </div>
         <div className="ev-card rounded-2xl p-4 mb-5 flex items-center justify-between"><span className="text-[14px] font-bold ev-ink">Total</span><span className="ev-display text-[19px] font-bold ev-accent">{inr(total)}</span></div>
+        {prototypeRequirement && <div className="ev-card rounded-xl px-3 py-2 mb-4"><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message for the customer (optional)" rows={3} className="bg-transparent outline-none text-[12.5px] ev-ink w-full resize-none placeholder:ev-faint" /></div>}
         <PrimaryButton onClick={send} icon={Send}>Send Quote to Customer</PrimaryButton>
       </div>
     </Screen>
   );
 }
 
-function QuotesScreen({ go, quotes, viewport = "mobile" }) {
-  const toneFor = (s) => s === "Accepted" ? "success" : s === "Rejected" ? "danger" : s === "Sent" ? "accent" : "neutral";
+function QuotesScreen({ go, quotes, prototypeQuotes = [], prototypeRequirements = [], viewport = "mobile" }) {
+  const sharedQuotes = prototypeQuotes.map((quote) => {
+    const requirement = prototypeRequirements.find((item) => item.id === quote.requirementId);
+    return {
+      id: quote.id,
+      customer: requirement?.customerName || "Customer",
+      event: requirement?.eventType || "Event",
+      guests: requirement?.guestCount || "",
+      items: [{ label: quote.message || "Quote", amount: quote.amount }],
+      status: quote.status[0].toUpperCase() + quote.status.slice(1),
+    };
+  });
+  const displayedQuotes = [...sharedQuotes, ...quotes];
+  const toneFor = (s) => s.toLowerCase() === "accepted" ? "success" : s.toLowerCase() === "rejected" ? "danger" : s.toLowerCase() === "sent" ? "accent" : "neutral";
   const isDesktop = viewport === "desktop";
   return (
     <Screen>
@@ -829,7 +957,7 @@ function QuotesScreen({ go, quotes, viewport = "mobile" }) {
               <th className="px-4 py-3 font-semibold">Customer</th><th className="px-4 py-3 font-semibold">Event</th><th className="px-4 py-3 font-semibold">Guests</th><th className="px-4 py-3 font-semibold">Line Items</th><th className="px-4 py-3 font-semibold">Total</th><th className="px-4 py-3 font-semibold">Status</th>
             </tr></thead>
             <tbody>
-              {quotes.map((q) => {
+              {displayedQuotes.map((q) => {
                 const total = q.items.reduce((s, i) => s + i.amount, 0);
                 return (
                   <tr key={q.id} className="text-[12.5px] border-t align-top" style={{ borderColor: "#EFE9DE" }}>
@@ -847,7 +975,7 @@ function QuotesScreen({ go, quotes, viewport = "mobile" }) {
         </div>
       ) : (
         <div className="px-5 pb-6 space-y-3">
-          {quotes.map((q) => {
+          {displayedQuotes.map((q) => {
             const total = q.items.reduce((s, i) => s + i.amount, 0);
             return (
               <div key={q.id} className="ev-card rounded-2xl p-4">
@@ -1000,18 +1128,28 @@ function PackageDetailScreen({ go, packageId, packages, setPackages }) {
 
 /* ---- Profile / Earnings / Reviews / Notifications / Settings / More ---- */
 
-function VendorProfileScreen({ go }) {
+function VendorProfileScreen({ go, vendorProfile }) {
+  const business = {
+    ...BUSINESS,
+    name: vendorProfile.businessName,
+    owner: vendorProfile.fullName,
+    phone: vendorProfile.phone,
+    email: vendorProfile.email,
+    city: vendorProfile.city,
+    description: vendorProfile.description,
+    image: vendorProfile.logoUrl,
+  };
   return (
     <Screen>
       <TopBar title="Business Profile" onBack={() => go("more")} right={<button onClick={() => go("editVendorProfile")} className="ev-tap"><Pencil size={16} className="ev-accent" /></button>} />
       <div className="px-5 pb-6">
-        <div className="w-full h-36 rounded-2xl overflow-hidden mb-4"><VendorPhoto src={BUSINESS.image} alt={BUSINESS.name} className="w-full h-full" /></div>
-        <div className="flex items-center gap-2 mb-1"><span className="ev-display text-[18px] font-semibold ev-ink">{BUSINESS.name}</span><BadgeCheck size={16} className="ev-success" /></div>
-        <div className="text-[12px] ev-muted mb-3">{BUSINESS.category} · {BUSINESS.experience} experience · {BUSINESS.city}</div>
+        <div className="w-full h-36 rounded-2xl overflow-hidden mb-4">{business.image ? <VendorPhoto src={business.image} alt={business.name || "Vendor logo"} className="w-full h-full" /> : <div className="w-full h-full ev-bg-accent-soft flex items-center justify-center"><Building2 size={28} className="ev-accent" /></div>}</div>
+        <div className="flex items-center gap-2 mb-1"><span className="ev-display text-[18px] font-semibold ev-ink">{business.name || "Business name not provided"}</span><BadgeCheck size={16} className="ev-success" /></div>
+        <div className="text-[12px] ev-muted mb-3">{BUSINESS.category} · {BUSINESS.experience} experience · {business.city || "City not provided"}</div>
         <div className="flex items-center gap-1 mb-4 text-[12.5px]"><Star size={14} className="ev-gold fill-current" /><span className="font-semibold ev-ink">{BUSINESS.rating}</span><span className="ev-muted">({BUSINESS.reviewCount} reviews)</span></div>
-        <p className="text-[12.5px] ev-muted leading-relaxed mb-4">{BUSINESS.description}</p>
+        <p className="text-[12.5px] ev-muted leading-relaxed mb-4">{business.description || "No business description provided."}</p>
         <div className="ev-card rounded-2xl p-4 mb-3">
-          <ReviewRow label="Owner" value={BUSINESS.owner} /><ReviewRow label="Phone" value={BUSINESS.phone} /><ReviewRow label="Email" value={BUSINESS.email} />
+          <ReviewRow label="Owner" value={business.owner || "Name not provided"} /><ReviewRow label="Phone" value={business.phone || "Phone not provided"} /><ReviewRow label="Email" value={business.email || "Email not provided"} />
           <ReviewRow label="Service Area" value={BUSINESS.serviceArea} /><ReviewRow label="Languages" value={BUSINESS.languages.join(", ")} />
         </div>
         <div className="ev-card rounded-2xl p-4 mb-3">
@@ -1026,26 +1164,58 @@ function VendorProfileScreen({ go }) {
     </Screen>
   );
 }
-function EditVendorProfileScreen({ go }) {
-  const [name, setName] = useState(BUSINESS.name);
-  const [description, setDescription] = useState(BUSINESS.description);
-  const [serviceArea, setServiceArea] = useState(BUSINESS.serviceArea);
+function EditVendorProfileScreen({ go, vendorProfile, onSaveProfileImage }) {
+  const [name, setName] = useState(vendorProfile.businessName);
+  const [description, setDescription] = useState(vendorProfile.description);
+  const [serviceArea, setServiceArea] = useState(vendorProfile.city);
   const [hours, setHours] = useState("9:00 AM – 9:00 PM");
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(vendorProfile.logoUrl);
+  const [imageError, setImageError] = useState("");
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setPreviewUrl(vendorProfile.logoUrl);
+  }, [vendorProfile.logoUrl]);
+
+  const handleImageChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const acceptedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (!acceptedTypes.includes(file.type)) {
+      setImageError("Please select a JPG, PNG, or WEBP image.");
+      event.target.value = "";
+      return;
+    }
+
+    setImageError("");
+    setSelectedImageFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+  };
+
+  const save = () => {
+    if (selectedImageFile) onSaveProfileImage({ file: selectedImageFile, previewUrl });
+    go("vendorProfile");
+  };
+
   return (
     <Screen>
       <TopBar title="Edit Profile" onBack={() => go("vendorProfile")} />
       <div className="px-5 pb-6">
         <div className="flex flex-col items-center mb-6">
-          <div className="w-24 h-24 rounded-2xl overflow-hidden mb-2 relative"><VendorPhoto src={BUSINESS.image} alt="cover" className="w-full h-full" />
-            <div className="absolute bottom-1 right-1 w-7 h-7 rounded-full ev-card flex items-center justify-center"><Camera size={12} className="ev-accent" /></div>
+          <div className="w-24 h-24 rounded-2xl overflow-hidden mb-2 relative">{previewUrl ? <VendorPhoto src={previewUrl} alt="Vendor logo" className="w-full h-full" /> : <div className="w-full h-full ev-bg-accent-soft flex items-center justify-center"><Building2 size={24} className="ev-accent" /></div>}
+            <button type="button" onClick={() => fileInputRef.current?.click()} aria-label="Choose profile image" className="absolute bottom-1 right-1 w-7 h-7 rounded-full ev-card flex items-center justify-center"><Camera size={12} className="ev-accent" /></button>
           </div>
+          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleImageChange} />
+          {imageError && <p className="text-[11px] text-red-600 mb-2">{imageError}</p>}
           <span className="text-[11.5px] ev-muted">Tap to change photos</span>
         </div>
         <InputField label="Business Name" value={name} onChange={setName} icon={Building2} />
         <InputField label="Description" value={description} onChange={setDescription} />
         <InputField label="Service Area" value={serviceArea} onChange={setServiceArea} icon={MapPin} />
         <InputField label="Operating Hours" value={hours} onChange={setHours} icon={Clock} />
-        <PrimaryButton onClick={() => go("vendorProfile")} icon={Check}>Save Changes</PrimaryButton>
+        <PrimaryButton onClick={save} icon={Check}>Save Changes</PrimaryButton>
       </div>
     </Screen>
   );
@@ -1331,7 +1501,7 @@ function ResourcesScreen({ go, resources, setResources }) {
     </Screen>
   );
 }
-function VendorSettingsScreen({ go, setLoggedIn }) {
+function VendorSettingsScreen({ go, onLogout }) {
   const [notif, setNotif] = useState(true); const [autoQuote, setAutoQuote] = useState(false);
   return (
     <Screen>
@@ -1348,7 +1518,7 @@ function VendorSettingsScreen({ go, setLoggedIn }) {
         </div>
         <button onClick={() => go("vendorProfile")} className="ev-tap w-full ev-card rounded-2xl p-3.5 flex items-center gap-3 mb-2.5"><Building2 size={16} className="ev-accent" /><span className="flex-1 text-left text-[13px] font-medium ev-ink">Business Profile</span><ChevronRight size={15} className="ev-faint" /></button>
         <button className="ev-tap w-full ev-card rounded-2xl p-3.5 flex items-center gap-3"><AlertCircle size={16} className="ev-accent" /><span className="flex-1 text-left text-[13px] font-medium ev-ink">Help & Support</span><ChevronRight size={15} className="ev-faint" /></button>
-        <button onClick={() => { setLoggedIn(false); go("vendorLanding"); }} className="ev-tap w-full text-center py-3.5 mt-5 text-[13px] font-semibold flex items-center justify-center gap-1.5" style={{ color: "#B23B4A" }}><LogOut size={14} /> Log Out</button>
+        <button onClick={onLogout} className="ev-tap w-full text-center py-3.5 mt-5 text-[13px] font-semibold flex items-center justify-center gap-1.5" style={{ color: "#B23B4A" }}><LogOut size={14} /> Log Out</button>
       </div>
     </Screen>
   );
@@ -1433,12 +1603,154 @@ function SidebarNav({ active, go, expanded }) {
 export default function EventraVendorApp() {
   const [screen, setScreen] = useState("vendorLanding");
   const [loggedIn, setLoggedIn] = useState(false);
+  const [vendorProfile, setVendorProfile] = useState({
+    fullName: "",
+    email: "",
+    phone: "",
+    businessName: "",
+    city: "",
+    description: "",
+    logoUrl: "",
+  });
   const [enquiries, setEnquiries] = useState(INITIAL_ENQUIRIES);
   const [quotes, setQuotes] = useState(INITIAL_QUOTES);
   const [menus, setMenus] = useState(INITIAL_MENUS);
   const [packages, setPackages] = useState(INITIAL_PACKAGES);
   const [staff, setStaff] = useState(STAFF);
   const [resources, setResources] = useState(RESOURCES);
+  const prototypeState = usePrototypeState();
+  const prototypeRequirements = getRequirementsForVendor(prototypeState, PROTOTYPE_VENDOR_ID).slice().reverse();
+  const prototypeQuotes = getQuotesForVendor(prototypeState, PROTOTYPE_VENDOR_ID);
+  const sessionTokenRef = useRef(0);
+  const logoutInProgressRef = useRef(false);
+
+  useEffect(() => {
+    registerPrototypeVendor({
+      id: PROTOTYPE_VENDOR_ID,
+      businessName: vendorProfile.businessName || "Annapoorna Catering Co.",
+      category: "Catering",
+      location: vendorProfile.city || "Chennai",
+      status: "active",
+    });
+  }, [vendorProfile.businessName, vendorProfile.city]);
+
+  const loadVendorProfile = async (user, vendorRecord = null) => {
+    const resolvedVendorRecord = vendorRecord || (await getVendorProfile(user.id)).profile || null;
+    setVendorProfile({
+      fullName: user.user_metadata?.full_name || user.email?.split("@")[0] || "",
+      email: user.email || "",
+      phone: user.user_metadata?.phone || resolvedVendorRecord?.phone || "",
+      businessName: resolvedVendorRecord?.business_name || "",
+      city: resolvedVendorRecord?.city || "",
+      description: resolvedVendorRecord?.description || "",
+      logoUrl: resolvedVendorRecord?.logo_url || "",
+    });
+  };
+
+  const clearVendorSession = () => {
+    sessionTokenRef.current += 1;
+    setLoggedIn(false);
+    setVendorProfile({
+      fullName: "",
+      email: "",
+      phone: "",
+      businessName: "",
+      city: "",
+      description: "",
+      logoUrl: "",
+    });
+    setScreen("vendorLanding");
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const restoreVendorSession = async () => {
+      const { user, profile, error } = await getCurrentVendor();
+      if (!mounted) return;
+      if (error || !user) {
+        clearVendorSession();
+        return;
+      }
+
+      setLoggedIn(true);
+      await loadVendorProfile(user, profile);
+      setScreen("dashboard");
+    };
+
+    restoreVendorSession();
+    const unsubscribe = onVendorAuthStateChange(async ({ user }) => {
+      if (!mounted) return;
+
+      const syncToken = sessionTokenRef.current + 1;
+      sessionTokenRef.current = syncToken;
+
+      if (!user) {
+        clearVendorSession();
+        return;
+      }
+
+      const { profile: vendorRecord, error } = await getVendorProfile(user.id);
+      if (!mounted || syncToken !== sessionTokenRef.current) return;
+
+      if (error || !vendorRecord) {
+        await signOutVendor();
+        clearVendorSession();
+        return;
+      }
+
+      setLoggedIn(true);
+      await loadVendorProfile(user, vendorRecord);
+      if (!mounted || syncToken !== sessionTokenRef.current) return;
+      setScreen("dashboard");
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const handleVendorAuthenticated = async (authenticatedUser = null) => {
+    let user = authenticatedUser;
+
+    if (!user) {
+      const { user: currentUser, error } = await getCurrentVendor();
+      if (error || !currentUser) {
+        setLoggedIn(false);
+        setScreen("vendorLanding");
+        return;
+      }
+      user = currentUser;
+    }
+
+    const { profile: vendorRecord, error } = await getVendorProfile(user.id);
+    if (error || !vendorRecord) {
+      setLoggedIn(false);
+      setScreen("vendorLanding");
+      return;
+    }
+
+    setLoggedIn(true);
+    await loadVendorProfile(user, vendorRecord);
+    setScreen("dashboard");
+  };
+
+  const handleVendorLogout = async () => {
+    if (logoutInProgressRef.current) return;
+    logoutInProgressRef.current = true;
+
+    try {
+      await signOutVendor();
+    } finally {
+      logoutInProgressRef.current = false;
+      clearVendorSession();
+    }
+  };
+
+  const handleSaveProfileImage = ({ file, previewUrl }) => {
+    setVendorProfile((current) => ({ ...current, logoUrl: previewUrl, logoFile: file }));
+  };
 
   const width = useViewport();
   const isMobile = width < 768;
@@ -1449,33 +1761,33 @@ export default function EventraVendorApp() {
 
   let content;
   if (screen.startsWith("bookingDetail_")) content = <BookingDetailScreen go={go} bookingId={screen.replace("bookingDetail_", "")} />;
-  else if (screen.startsWith("quoteBuilder_")) content = <QuoteBuilderScreen go={go} enquiryId={screen.replace("quoteBuilder_", "")} enquiries={enquiries} setQuotes={setQuotes} quotes={quotes} />;
+  else if (screen.startsWith("quoteBuilder_")) content = <QuoteBuilderScreen go={go} enquiryId={screen.replace("quoteBuilder_", "")} enquiries={enquiries} setQuotes={setQuotes} quotes={quotes} prototypeRequirements={prototypeRequirements} vendorProfile={vendorProfile} />;
   else if (screen.startsWith("menuDetail_")) content = <MenuDetailScreen go={go} menuId={screen.replace("menuDetail_", "")} menus={menus} setMenus={setMenus} />;
   else if (screen.startsWith("packageDetail_")) content = <PackageDetailScreen go={go} packageId={screen.replace("packageDetail_", "")} packages={packages} setPackages={setPackages} />;
   else if (screen.startsWith("teamDetail_")) content = <TeamDetailScreen go={go} teamId={screen.replace("teamDetail_", "")} teams={TEAMS} staff={staff} />;
   else {
     const map = {
       vendorLanding: <VendorLandingScreen go={go} />,
-      vendorLogin: <VendorLoginScreen go={go} setLoggedIn={setLoggedIn} />,
+      vendorLogin: <VendorLoginScreen go={go} onVendorAuthenticated={handleVendorAuthenticated} />,
       vendorRegister: <VendorRegisterScreen go={go} />,
       onboard1: <Onboard1 go={go} />, onboard2: <Onboard2 go={go} />, onboard3: <Onboard3 go={go} />, onboard4: <Onboard4 go={go} />, onboard5: <Onboard5 go={go} />,
-      verificationPending: <VerificationPendingScreen go={go} setLoggedIn={setLoggedIn} />,
-      dashboard: <DashboardScreen go={go} viewport={viewport} />,
+      verificationPending: <VerificationPendingScreen go={go} onVendorAuthenticated={handleVendorAuthenticated} />,
+      dashboard: <DashboardScreen go={go} viewport={viewport} vendorProfile={vendorProfile} />,
       calendar: <CalendarScreen go={go} />,
       bookings: <BookingsScreen go={go} viewport={viewport} />,
-      enquiries: <EnquiriesScreen go={go} enquiries={enquiries} setEnquiries={setEnquiries} viewport={viewport} />,
-      quotes: <QuotesScreen go={go} quotes={quotes} viewport={viewport} />,
+      enquiries: <EnquiriesScreen go={go} enquiries={enquiries} setEnquiries={setEnquiries} prototypeRequirements={prototypeRequirements} onUpdatePrototypeRequirement={updateRequirementStatus} viewport={viewport} />,
+      quotes: <QuotesScreen go={go} quotes={quotes} prototypeQuotes={prototypeQuotes} prototypeRequirements={prototypeState.requirements} viewport={viewport} />,
       menus: <MenusScreen go={go} menus={menus} setMenus={setMenus} />,
       packages: <PackagesScreen go={go} packages={packages} />,
       staff: <StaffScreen go={go} teams={TEAMS} staff={staff} setStaff={setStaff} />,
       resources: <ResourcesScreen go={go} resources={resources} setResources={setResources} />,
-      vendorProfile: <VendorProfileScreen go={go} />,
-      editVendorProfile: <EditVendorProfileScreen go={go} />,
+      vendorProfile: <VendorProfileScreen go={go} vendorProfile={vendorProfile} />,
+      editVendorProfile: <EditVendorProfileScreen go={go} vendorProfile={vendorProfile} onSaveProfileImage={handleSaveProfileImage} />,
       earnings: <EarningsScreen go={go} viewport={viewport} />,
       reviews: <ReviewsScreen go={go} />,
       notifications: <NotificationsScreen go={go} />,
       more: <MoreScreen go={go} />,
-      vendorSettings: <VendorSettingsScreen go={go} setLoggedIn={setLoggedIn} />,
+      vendorSettings: <VendorSettingsScreen go={go} onLogout={handleVendorLogout} />,
       chatVendor: <ChatVendorScreen go={go} />,
     };
     content = map[screen] || <DashboardScreen go={go} viewport={viewport} />;
